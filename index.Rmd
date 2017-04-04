@@ -1,0 +1,93 @@
+---
+title: "Predicting Excercise Type from Personal Fitness Devices"
+output:
+  html_document: default
+  html_notebook:
+    theme: journal
+---
+  
+  
+#### Setup
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+```
+
+  
+  
+#### Get Data
+```{r}
+# download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "training.csv")
+# download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "testing.csv")
+train <- read.csv("training.csv", stringsAsFactors = FALSE)
+test  <- read.csv("testing.csv", stringsAsFactors = FALSE)
+```
+
+
+#### Clean Data
+```{r}
+## Examine character predictors
+is_num <- as.numeric(which(sapply(train, class) != "character"))
+#train_char <- train[, -is_num]
+#sapply(train_char, function(x) sum(x == ""))
+#head(train_char[, c(1, 2, 3, 37)])
+#table(train_char$new_window)
+
+## Modify new_window to numeric in training and testing data
+# train$new_window <- ifelse(train$new_window == "no", 0, 1)
+# test$new_window  <- ifelse(test$new_window == "no", 0, 1)
+# is_num <- as.numeric(which(sapply(train, class) != "character"))
+
+## Identify numeric predictos with a lot of NAs
+na_count <- sapply(train[, is_num], function(x) sum(is.na(x)))
+
+# Select numeric predictors with no NAs
+predictors <- is_num[na_count == 0]
+
+## Remove id and raw timestamps
+predictors <- predictors[-c(1:3)]
+
+response <- 160
+
+x <- train[, predictors]
+y <- train[, response]
+
+xy <- train[, c(predictors, response)]
+```
+
+
+
+
+
+```{r}
+## Linear Discriminant Analysis
+fit_lda <- train(x, y, method = "lda",
+                 preProcess = c("scale", "center"),
+                 trControl = trainControl(method = "cv", number = 5))
+
+## Random Forrest
+#proc_obj  <- preProcess(xy[, -response], method = c("scale", "center"))
+#xy_proc   <- predict(proc_obj, xy)
+#fit_rf    <- ranger(factor(classe) ~ ., data = xy_proc, num.trees = 30)
+
+
+## Classification Tree
+fit_rpart <- train(classe ~ ., data = xy,
+                   method = "rpart",
+                   preProcess = c("scale", "center"))
+
+
+## Extreme Gradient Boosting
+#xy_xgb <- xgb.DMatrix(data = x, label = y)
+
+
+#rpart.plot(fit_rpart$finalModel)
+
+
+```
+
+
+
+
+
+
+
