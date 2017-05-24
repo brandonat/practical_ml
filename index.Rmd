@@ -1,44 +1,54 @@
 ---
-title: "Predicting Excercise Type from Personal Fitness Devices"
+title: "Predicting Excercise Type"
 output:
   html_document: default
   html_notebook:
     theme: journal
 ---
   
+### Overview
+
+The following analysis evaluates personal fitness data for the Coursera machine learning course within the data science specialization. The objective is to predict one of five exercise movements using data collected from personal fitness monitors. 
+
+Several models are built and tested for accuracy using a hold out dataset. The final result are predicitions for the test set, which is provided without the corresponding exercise movements.
+
+More information on the relative performance of families of machine learning models is available in the following article:
+[http://jmlr.org/papers/volume15/delgado14a/delgado14a.pdf](http://jmlr.org/papers/volume15/delgado14a/delgado14a.pdf).
   
-#### Setup
+### Setup
 ```{r, message=FALSE, warning=FALSE}
 library(caret)
+library(MASS)         ## Linear Discriminant Analysis
+library(rpart)        ## Regression Trees
+library(randomForest) ## Random Forest
+library(ranger)       ## A Fast Random Forest
+library(xgboost)      ## Extreme Gradient Boosting
+library(e1071)        ## Suppor Vector Machine
 ```
 
-  
-  
-#### Get Data
+### Get data
 ```{r}
+## On the first run, download the csv files
+
 # download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "training.csv")
 # download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "testing.csv")
-train <- read.csv("training.csv", stringsAsFactors = FALSE)
-test  <- read.csv("testing.csv", stringsAsFactors = FALSE)
+
+train_raw <- read.csv("training.csv", stringsAsFactors = FALSE)
+test_raw  <- read.csv("testing.csv", stringsAsFactors = FALSE)
 ```
 
+### Prepare data
 
-#### Clean Data
+#### Select factors
+
+Remove character data, timestamps, id, and user name. Also, remove numeric data with any missing values (where there was any missing values, all the values were missing actually).
+
 ```{r}
 ## Examine character predictors
-is_num <- as.numeric(which(sapply(train, class) != "character"))
-#train_char <- train[, -is_num]
-#sapply(train_char, function(x) sum(x == ""))
-#head(train_char[, c(1, 2, 3, 37)])
-#table(train_char$new_window)
-
-## Modify new_window to numeric in training and testing data
-# train$new_window <- ifelse(train$new_window == "no", 0, 1)
-# test$new_window  <- ifelse(test$new_window == "no", 0, 1)
-# is_num <- as.numeric(which(sapply(train, class) != "character"))
+is_num <- as.numeric(which(sapply(train_raw, class) != "character"))
 
 ## Identify numeric predictos with a lot of NAs
-na_count <- sapply(train[, is_num], function(x) sum(is.na(x)))
+na_count <- sapply(train_raw[, is_num], function(x) sum(is.na(x)))
 
 # Select numeric predictors with no NAs
 predictors <- is_num[na_count == 0]
@@ -46,43 +56,179 @@ predictors <- is_num[na_count == 0]
 ## Remove id and raw timestamps
 predictors <- predictors[-c(1:3)]
 
-response <- 160
-
-x <- train[, predictors]
-y <- train[, response]
-
-xy <- train[, c(predictors, response)]
+## Response is the last column
+response   <- 160
 ```
 
+#### Create a hold-out set
 
-
-
+Since the `testing` data is used for final evaluation and the response is unknown, an out-of-sample validation is needed to evaluate the different models.
 
 ```{r}
-## Linear Discriminant Analysis
-fit_lda <- train(x, y, method = "lda",
-                 preProcess = c("scale", "center"),
-                 trControl = trainControl(method = "cv", number = 5))
+is_train <- createDataPartition(train_raw[, response], p = 0.7, list = FALSE)
 
-## Random Forrest
-#proc_obj  <- preProcess(xy[, -response], method = c("scale", "center"))
-#xy_proc   <- predict(proc_obj, xy)
-#fit_rf    <- ranger(factor(classe) ~ ., data = xy_proc, num.trees = 30)
+## Various arrangements for the models
+x <- train_raw[is_train, predictors]
+y <- factor(train_raw[is_train, response])
 
+## Hold out for out-of-sample error estimates
+hold_out_x <- train_raw[-is_train, predictors]
+hold_out_y <- factor(train_raw[-is_train, response])
 
-## Classification Tree
-fit_rpart <- train(classe ~ ., data = xy,
-                   method = "rpart",
-                   preProcess = c("scale", "center"))
+## Final testing dataset
+test_x <- test_raw[, predictors]
+test_y <- factor(test_raw[, response])
+```
 
+#### Preprocess features
+```{r}
+proc_obj <- preProcess(x, method = c("scale", "center"))
+x_proc   <- predict(proc_obj, x)
+```
+
+## Fit models
+
+#### Linear Discriminant Anlaysis
+```{r}
+system.time(
+  fit_lda <- train(x_proc, y, method = "lda",
+                   trControl = trainControl(method = "cv", number = 5))
+)
+```
+
+#### Support Vector Machine
+
+The SVM builds multiple binary models (one-against-one) and uses a voting mechanism to determine which class is selected.
+
+```{r}
+system.time(
+  fit_svm <- svm(x_proc, y, scale = FALSE)
+)
+```
+
+#### Classification Tree
+```{r}
+system.time(
+  fit_rpart <- train(x_proc, y, method = "rpart")
+)
+```
+
+#### Random Forest
+
+Based on the output, there are no major improvements at around 150 trees.
+
+```{r}
+## First tune randomeforest
+system.time(
+  tuneRF(x_proc, y)
+)
+
+## Based on tuning, use mtry = 14; output provided for every 10 trees
+system.time(
+  fit_rf <- randomForest(x_proc, y, do.trace = 10, mtry = 14, ntree = 150)
+)
+```
+
+#### Faster Random Forest (ranger)
+```{r}
+system.time(
+  fit_rgr <- ranger(y ~ ., data = cbind(x_proc, y))
+)
+```
+
+#### Extreme Gradient Boosting
+```{r}
+## --------------------------------------------------
+## Convert y to numeric values, starting at 0
+## A = 0
+## B = 1
+## ...
+num_y <- sapply(y, function(x) which(LETTERS == x)) - 1
+
+## Create DMatrix object to speed up processing
+xy_xgb <- xgb.DMatrix(as.matrix(x_proc), label = num_y)
+
+## Set parameters & run model
+## Objective is for multiple classes
+param <- list("objective" = "multi:softprob",
+              "eval_metric" = "mlogloss",
+              "num_class" = 5)
+
+## Run the model with 10 rounds
+system.time(
+  fit_xgb <- xgboost(xy_xgb, param = param, nrounds = 10, verbose = FALSE)
+)
+```
+
+#### Optional: save models
+```{r}
+#save(fit_lda, fit_rpart, fit_rf, fit_rgr, fit_xgb, fit_svm, file = "models.RData")
+```
+
+### Evaluate
+
+#### Setup
+
+Preprocess features using same object from training. Also, create a standard eval function for use in most cases.
+
+```{r}
+
+new_x <- predict(proc_obj, hold_out_x)
+new_y <- hold_out_y
+
+## Function to evaluate model
+eval_model <- function(model) {
+  res <- predict(model, new_x)
+  metrics <- confusionMatrix(res, new_y)$overall
+  metrics <- round(metrics, 4)
+  m_name <- deparse(substitute(model))
+  cbind(data.frame(Model = m_name), t(metrics))
+}
+
+options(scipen = 999, digits = 4)
+```
+
+#### Prediction Metrics
+
+Based on accuracy, the tuned random forest performs the best.
+  
+However, if processing time is a factor, the xgboost algorithm is much faster with about the same accuracy.
+
+```{r, }
+## Straightforward metrics
+m1 <- eval_model(fit_lda)
+m2 <- eval_model(fit_svm)
+m3 <- eval_model(fit_rpart)
+m4 <- eval_model(fit_rf)
+
+## Fast Random Forest
+res <- predict(fit_rgr, new_x)
+metrics <- confusionMatrix(res$predictions, new_y)$overall
+metrics <- round(metrics, 4)
+m5 <- cbind(data.frame(Model = "fit_rgr"), t(metrics))
 
 ## Extreme Gradient Boosting
-#xy_xgb <- xgb.DMatrix(data = x, label = y)
+new_xgb <- xgb.DMatrix(as.matrix(new_x))
+res <- predict(fit_xgb, new_xgb, reshape = TRUE)
 
+i <- apply(res, 1, which.max)
+pred <- factor(LETTERS[i])
 
-#rpart.plot(fit_rpart$finalModel)
+metrics <- confusionMatrix(pred, hold_out_y)$overall
+metrics <- round(metrics, 4)
+m6 <- cbind(data.frame(Model = "fit_xgb"), t(metrics))
 
+rbind(m1, m2, m3, m4, m5, m6)
+```
 
+### Predict response on test set
+
+```{r}
+new_x <- predict(proc_obj, test_x)
+new_y <- test_y
+
+pred <- predict(fit_rf, new_x)
+pred
 ```
 
 
