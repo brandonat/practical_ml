@@ -117,6 +117,8 @@ system.time(
 
 Based on the output, there are no major improvements at around 150 trees.
 
+The model is tuned by selecting the number of features to use (mtry) in each individual tree. On multiple runs, the tuning suggests either 14 or 28 features are the preferred setting. For simplicity, mtry is set to 14 even though some runs suggest 28 is slightly better.
+
 ```{r}
 ## First tune randomeforest
 system.time(
@@ -156,7 +158,7 @@ param <- list("objective" = "multi:softprob",
 
 ## Run the model with 10 rounds
 system.time(
-  fit_xgb <- xgboost(xy_xgb, param = param, nrounds = 10, verbose = FALSE)
+  fit_xgb <- xgboost(xy_xgb, param = param, nrounds = 10, verbose = 1)
 )
 ```
 
@@ -190,9 +192,9 @@ options(scipen = 999, digits = 4)
 
 #### Prediction Metrics
 
-Based on accuracy, the tuned random forest performs the best.
+Based on accuracy, the tuned random forest and the `ranger` random forest perform the best, though the speed of the `ranger` implementation is significantly better.
   
-However, if processing time is a factor, the xgboost algorithm is much faster with about the same accuracy.
+Morevier, if processing time is a priority, the xgboost algorithm is very fast with about the same accuracy.
 
 ```{r, }
 ## Straightforward metrics
@@ -223,12 +225,14 @@ rbind(m1, m2, m3, m4, m5, m6)
 
 ### Predict response on test set
 
+Use the fast random forest model from the `ranger` package.
+
 ```{r}
 new_x <- predict(proc_obj, test_x)
 new_y <- test_y
 
-pred <- predict(fit_rf, new_x)
-pred
+pred <- predict(fit_rgr, new_x)
+pred$predictions
 ```
 
 
